@@ -2,6 +2,7 @@ import logging
 import datetime
 import io
 import zipfile
+import time
 from typing import Any, Optional
 
 import pandas as pd
@@ -29,7 +30,21 @@ app = FastAPI(
 )
 
 # --- Prometheus Metrics Definitions ---
+registry = CollectorRegistry()
 
+api_requests_total = Counter(
+    'api_requests_total',
+    'Total number of API requests',
+    ['endpoint', 'method', 'status_code'],
+    registry=registry
+)
+
+api_request_duration_seconds = Histogram(
+    'api_request_duration_seconds',
+    'API request duration in seconds',
+    ['endpoint', 'method', 'status_code'],
+    registry=registry
+)
 
 
 # --- Global Variables for Model and Data ---
@@ -123,10 +138,25 @@ async def read_root():
 @app.post("/predict", response_model=PredictionOutput)
 async def predict(article: BikeSharingInput):
     """Predicts the bike count for a given set of features."""
+    start_time = time.time()
+    status_code = "200"
+
     try:
         input_df = pd.DataFrame([article.model_dump()])[NUM_FEATS + CAT_FEATS]
         prediction = model.predict(input_df)[0]
         return PredictionOutput(predicted_count=float(prediction))
     except Exception as e:
         logger.error(f"Prediction error: {e}")
+        status_code = "500"
         raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
+    finally:
+        duration = time.time() - start_time
+        api_requests_total.labels(endpoint="/predict", method="POST", status_code=status_code).inc()
+        api_request_duration_seconds.labels(endpoint="/predict", method="POST", status_code=status_code).observe(duration)
+
+@app.get("/metrics")
+async def metrics(request: Request):
+    """
+    Expose Prometheus metrics.
+    """
+    return Response(content=generate_latest(registry), media_type="text/plain")
