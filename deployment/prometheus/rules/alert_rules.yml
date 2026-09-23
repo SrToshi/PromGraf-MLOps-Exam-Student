@@ -1,0 +1,11 @@
+groups:
+  - name: bike-api-alerts
+    rules:
+      - alert: BikeApiDown
+        expr: up{job="bike_api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The Bike Sharing API is unreachable."
+          description: "The job 'bike_api' has been DOWN (unreachable) for more than 1 minute. Please check the `bike-api` container."  
