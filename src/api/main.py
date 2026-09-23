@@ -11,6 +11,7 @@ from sklearn.ensemble import RandomForestRegressor
 from evidently import Report, Dataset, DataDefinition, Regression
 from evidently.metrics import MAE, RMSE, R2Score
 from evidently.presets import DataDriftPreset
+from evidently.metrics import MAE, RMSE, R2Score, MAPE
 
 from fastapi import FastAPI, HTTPException, Response, Request
 from pydantic import BaseModel, Field
@@ -46,6 +47,22 @@ api_request_duration_seconds = Histogram(
     registry=registry
 )
 
+model_rmse_score = Gauge(
+    'model_rmse_score',
+    'RMSE of the regression model',
+    registry=registry)
+
+model_mae_score = Gauge(
+    'model_mae_score',
+    'MAE of the regression model',
+    registry=registry
+)   
+
+model_r2_score = Gauge(
+    'model_r2_score',
+    'R2 Score of the regression model',
+    registry=registry
+)
 
 # --- Global Variables for Model and Data ---
 TARGET = 'cnt'
@@ -153,6 +170,75 @@ async def predict(article: BikeSharingInput):
         duration = time.time() - start_time
         api_requests_total.labels(endpoint="/predict", method="POST", status_code=status_code).inc()
         api_request_duration_seconds.labels(endpoint="/predict", method="POST", status_code=status_code).observe(duration)
+
+@app.post("/evaluate", response_model=EvaluationReportOutput)
+async def evaluate(payload: EvaluationData):
+    """Runs an Evidently report comparing current data (payload) against the January reference."""
+    start_time = time.time()
+    status_code = "200"
+
+    try:
+        current_df = pd.DataFrame(payload.data)[NUM_FEATS + CAT_FEATS + [TARGET]].copy()
+        current_df[PREDICTION] = model.predict(current_df[NUM_FEATS + CAT_FEATS])
+
+        definition = DataDefinition(regression=[Regression(target=TARGET, prediction=PREDICTION)])
+        ref_dataset = Dataset.from_pandas(reference_data, data_definition=definition)
+        cur_dataset = Dataset.from_pandas(current_df, data_definition=definition)
+
+        report = Report([RMSE(), MAE(), R2Score(), MAPE(), DataDriftPreset()])
+        my_eval = report.run(current_data=cur_dataset, reference_data=ref_dataset)
+        # Raw result from Evidently — already has all computed values,
+        # but as a generic flat list, not indexed by metric name yet.
+        result_dict = my_eval.dict()
+
+        logger.info(f"EVIDENTLY DEBUG DICT: {result_dict}")
+
+        # Empty placeholders — filled below, default None/0 if a metric
+        # is ever missing from the result (p.ex. a future Evidently version changes the names).
+        rmse_val = mae_val = r2_val = mape_val = None
+        drift_share_val = 0.0
+
+        # Translate the generic list into our named variables,
+        # matching each entry by its metric_name since list order
+        # isn't guaranteed once DataDriftPreset expands into one entry per column.
+        for m in result_dict.get('metrics', []):
+            name = m.get('metric_name', '')
+            value = m.get('value')
+            if name.startswith('RMSE'):
+                rmse_val = float(value)
+            elif name.startswith('MAE'):
+                mae_val = float(value['mean']) if isinstance(value, dict) else float(value)
+            elif name.startswith('R2Score'):
+                r2_val = float(value)
+            elif name.startswith('MAPE'):
+                mape_val = float(value['mean']) if isinstance(value, dict) else float(value)
+            elif name.startswith('DriftedColumnsCount'):
+                drift_share_val = float(value.get('share', 0.0))
+
+        drift_val = 1 if drift_share_val >= 0.5 else 0
+
+
+        model_rmse_score.set(rmse_val or 0)
+        model_mae_score.set(mae_val or 0)
+        model_r2_score.set(r2_val or 0)
+
+        return EvaluationReportOutput(
+            message=f"Evaluation completed for period '{payload.evaluation_period_name}'",
+            rmse=rmse_val,
+            mape=mape_val,
+            mae=mae_val,
+            r2score=r2_val,
+            drift_detected=drift_val,
+            evaluated_items=len(current_df)
+        )
+    except Exception as e:
+        logger.error(f"Evaluation error: {e}")
+        status_code = "500"
+        raise HTTPException(status_code=500, detail=f"Evaluation failed: {e}")
+    finally:
+        duration = time.time() - start_time
+        api_requests_total.labels(endpoint="/evaluate", method="POST", status_code=status_code).inc()
+        api_request_duration_seconds.labels(endpoint="/evaluate", method="POST", status_code=status_code).observe(duration)
 
 @app.get("/metrics")
 async def metrics(request: Request):
