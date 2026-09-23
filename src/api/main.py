@@ -64,6 +64,18 @@ model_r2_score = Gauge(
     registry=registry
 )
 
+model_mape_score = Gauge(
+    'model_mape_score',
+    'MAPE of the regression model',
+    registry=registry
+)
+
+evidently_data_drift_detected_status = Gauge(
+    'evidently_data_drift_detected_status',
+    'Whether data drift was detected (1) or not (0)',
+    registry=registry
+)
+
 # --- Global Variables for Model and Data ---
 TARGET = 'cnt'
 PREDICTION = 'prediction'
@@ -221,6 +233,9 @@ async def evaluate(payload: EvaluationData):
         model_rmse_score.set(rmse_val or 0)
         model_mae_score.set(mae_val or 0)
         model_r2_score.set(r2_val or 0)
+
+        model_mape_score.set(mape_val or 0)
+        evidently_data_drift_detected_status.set(drift_val)
 
         return EvaluationReportOutput(
             message=f"Evaluation completed for period '{payload.evaluation_period_name}'",
