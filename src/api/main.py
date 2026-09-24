@@ -171,9 +171,16 @@ async def predict(article: BikeSharingInput):
     status_code = "200"
 
     try:
+        if not (1 <= article.season <= 4) or not (1 <= article.weathersit <= 4):
+            status_code = "400"
+            raise HTTPException(status_code=400, detail="season and weathersit must be between 1 and 4.")
+        
         input_df = pd.DataFrame([article.model_dump()])[NUM_FEATS + CAT_FEATS]
         prediction = model.predict(input_df)[0]
         return PredictionOutput(predicted_count=float(prediction))
+    
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Prediction error: {e}")
         status_code = "500"

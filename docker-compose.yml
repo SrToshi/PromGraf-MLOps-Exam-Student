@@ -43,5 +43,19 @@ services:
       - '--collector.filesystem.mount-points-exclude=^/(dev|proc|sys|var/lib/docker/.+|var/run/docker/netns/.+)$'
     restart: always
 
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deployment/grafana/provisioning:/etc/grafana/provisioning
+      - ./deployment/grafana/dashboards:/etc/grafana/provisioning/dashboards/json
+    depends_on:
+      - prometheus
+    restart: always
+
 volumes:
   prometheus_data: {}
+  grafana_data: {}
